@@ -1,0 +1,88 @@
+name: Automations
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: "0 1 * * SUN-SAT"
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "Command(s) to run"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - publish
+
+      dry_run:
+        description: "Dry-run"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  run:
+    name: Run automation tasks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: 1.19
+        id: go
+
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Go modules cache
+        id: cache-go-module
+        uses: actions/cache@v3
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Setup Go build cache
+        id: cache-go-build
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/go-build
+          key: ${{ runner.os }}-gobuild-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-gobuild-
+
+      - name: Download dependencies
+        if: steps.cache-go-module.outputs.cache-hit != 'true'
+        run: go mod download
+
+      - name: Set options
+        id: conf
+        run: |
+          set -e
+          case "${{ github.event.event_name }}" in
+          workflow_dispatch)
+            echo "::set-output name=dry_run::'${{ inputs.dry_run }}'"
+            echo "::set-output name=publish::${{contains(fromJson('["all", "publish"]'), inputs.command )}}"
+            ;;
+          pull_request)
+            echo "::set-output name=dry_run::'true'"
+            echo "::set-output name=publish::'true'"
+            ;;
+          *)
+            echo "::set-output name=dry_run::'false'"
+            echo "::set-output name=publish::'true'"
+            ;;
+          esac
+
+      - name: Publish signals
+        if: "${{ steps.conf.outputs.publish }} == 'true'"
+        env:
+          CLARIFY_USERNAME: "${{ secrets.CLARIFY_USERNAME }}"
+          CLARIFY_PASSWORD: "${{ secrets.CLARIFY_PASSWORD }}"
+        run: go run . -v publish -dry-run=${{ steps.conf.outputs.dry_run }}
